@@ -1,15 +1,14 @@
 SET FOREIGN_KEY_CHECKS = 0;
--- Vaciamos TODAS las tablas para evitar errores de claves duplicadas al re-ejecutar
-DELETE TABLE teaching_loads;
-DELETE TABLE grades;
-DELETE TABLE group_enrollments;
-DELETE TABLE subject_enrollments;
-DELETE TABLE `groups`;
-DELETE TABLE subjects;
-DELETE TABLE degrees;
-DELETE TABLE students;
-DELETE TABLE professors;
-DELETE TABLE people;
+DELETE FROM teaching_loads;
+DELETE FROM subject_enrollments;
+DELETE FROM grades;
+DELETE FROM group_enrollments;
+DELETE FROM groups;
+DELETE FROM subjects;
+DELETE FROM degrees;
+DELETE FROM students;
+DELETE FROM professors;
+DELETE FROM people;
 SET FOREIGN_KEY_CHECKS = 1;
 
 INSERT INTO people (person_id, dni, first_name, last_name, age, email) VALUES
