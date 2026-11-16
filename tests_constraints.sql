@@ -1,202 +1,218 @@
-USE grades;
+--
+-- Autor: David Ruiz
+-- Fecha: Noviembre de 2026
+-- Descripción: Tests de las restricciones declarativas de grades_db
+-- Se incluye en: iissi1/labs/L4 y AN-B
+--
 
+USE grades_db;
+
+-- =============================================================
+-- TABLA DE RESULTADOS
+-- Un registro por test: PASS si la operación prohibida se rechazó,
+-- FAIL si se permitió
+-- =============================================================
+CREATE OR REPLACE TABLE test_results (
+    test_id VARCHAR(20) PRIMARY KEY,
+    test_name VARCHAR(200) NOT NULL,
+    test_message VARCHAR(500) NOT NULL,
+    test_status ENUM('PASS','FAIL') NOT NULL,
+    execution_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================
+-- PROCEDIMIENTO AUXILIAR
+-- Registra el resultado de un test. El nombre es el texto del mensaje
+-- anterior a ':' (SUBSTRING_INDEX), por ejemplo 'RN01'
+-- =============================================================
 DELIMITER //
-
--- ==========================================
--- 1. EJEMPLOS BÁSICOS (Variables y Parámetros)
--- ==========================================
-
-CREATE OR REPLACE PROCEDURE ejemplo_variables_locales()
-BEGIN
-    DECLARE v_contador INT DEFAULT 0;
-    DECLARE v_nombre VARCHAR(100);
-    DECLARE v_promedio DECIMAL(4,2);
-    
-    SET v_contador = 10;
-    SELECT first_name INTO v_nombre FROM people WHERE person_id = 1;
-    
-    SELECT v_contador, v_nombre;
-END //
-
-CREATE OR REPLACE PROCEDURE ejemplo_in(
-    IN p_student_id INT
+CREATE OR REPLACE PROCEDURE p_log_test(
+    IN p_test_id VARCHAR(20),
+    IN p_message VARCHAR(500),
+    IN p_status ENUM('PASS','FAIL')
 )
 BEGIN
-    SELECT * FROM students WHERE student_id = p_student_id;
+    INSERT INTO test_results(test_id, test_name, test_message, test_status)
+    VALUES (p_test_id, SUBSTRING_INDEX(p_message, ':', 1), p_message, p_status);
 END //
-
-CREATE OR REPLACE PROCEDURE ejemplo_out(
-    IN p_student_id INT,
-    OUT p_average DECIMAL(4,2)
-)
-BEGIN
-    SELECT AVG(grade_value) INTO p_average
-    FROM grades
-    WHERE student_id = p_student_id;
-END //
-
-CREATE OR REPLACE PROCEDURE ejemplo_inout(
-    INOUT p_contador INT
-)
-BEGIN
-    SET p_contador = p_contador + 1;
-END //
-
--- ==========================================
--- 2. PROCEDIMIENTOS DE NEGOCIO DE GRADESDB
--- ==========================================
-
--- Procedimiento: Calcular la media de un estudiante (usado en el bloque de variables de sesión)
-CREATE OR REPLACE PROCEDURE p_student_average(
-    IN p_student_id INT,
-    OUT p_average DECIMAL(4,2)
-)
-BEGIN
-    SELECT AVG(grade_value) INTO p_average
-    FROM grades
-    WHERE student_id = p_student_id;
-END //
-
--- Procedimiento: Insertar un nuevo estudiante (en people y students dentro de una transacción)
-CREATE OR REPLACE PROCEDURE p_insert_student(
-    IN p_dni CHAR(9),
-    IN p_first_name VARCHAR(100),
-    IN p_last_name VARCHAR(150),
-    IN p_age TINYINT,
-    IN p_email VARCHAR(255),
-    IN p_access_method VARCHAR(20)
-)
-BEGIN
-    DECLARE v_person_id INT;
-    
-    -- Si ocurre cualquier error SQL (ej. DNI inválido o duplicado), deshace todo
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    START TRANSACTION;
-    
-    INSERT INTO people (dni, first_name, last_name, age, email)
-    VALUES (p_dni, p_first_name, p_last_name, p_age, p_email);
-    
-    SET v_person_id = LAST_INSERT_ID();
-    
-    INSERT INTO students (student_id, access_method)
-    VALUES (v_person_id, p_access_method);
-    
-    COMMIT;
-END //
-
--- Procedimiento: Insertar un nuevo profesor (con transacción)
-CREATE OR REPLACE PROCEDURE p_insert_professor(
-    IN p_dni CHAR(9),
-    IN p_first_name VARCHAR(100),
-    IN p_last_name VARCHAR(150),
-    IN p_age TINYINT,
-    IN p_email VARCHAR(255),
-    IN p_category VARCHAR(30)
-)
-BEGIN
-    DECLARE v_person_id INT;
-    
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    START TRANSACTION;
-    
-    INSERT INTO people (dni, first_name, last_name, age, email)
-    VALUES (p_dni, p_first_name, p_last_name, p_age, p_email);
-    
-    SET v_person_id = LAST_INSERT_ID();
-    
-    INSERT INTO professors (professor_id, category)
-    VALUES (v_person_id, p_category);
-    
-    COMMIT;
-END //
-
--- Procedimiento: Matricular a un alumno en una asignatura y en un grupo a la vez
-CREATE OR REPLACE PROCEDURE p_enroll_student(
-    IN p_student_id INT,
-    IN p_group_id INT
-)
-BEGIN
-    DECLARE v_subject_id INT;
-    DECLARE v_exists INT;
-
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    START TRANSACTION;
-
-    -- Obtenemos la asignatura a la que pertenece el grupo
-    SELECT subject_id INTO v_subject_id
-    FROM `groups`
-    WHERE group_id = p_group_id;
-
-    -- Si aún no está matriculado en la asignatura, lo matriculamos
-    SELECT COUNT(*) INTO v_exists
-    FROM subject_enrollments
-    WHERE student_id = p_student_id AND subject_id = v_subject_id;
-
-    IF v_exists = 0 THEN
-        INSERT INTO subject_enrollments (student_id, subject_id)
-        VALUES (p_student_id, v_subject_id);
-    END IF;
-
-    -- Lo matriculamos en el grupo
-    INSERT INTO group_enrollments (student_id, group_id)
-    VALUES (p_student_id, p_group_id);
-
-    COMMIT;
-END //
-
--- Procedimiento: Borrar una asignatura y todas sus dependencias en cascada manual
-CREATE OR REPLACE PROCEDURE p_delete_subject(
-    IN p_subject_id INT
-)
-BEGIN
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    START TRANSACTION;
-
-    DELETE FROM grades 
-    WHERE group_id IN (SELECT group_id FROM `groups` WHERE subject_id = p_subject_id);
-
-    DELETE FROM group_enrollments 
-    WHERE group_id IN (SELECT group_id FROM `groups` WHERE subject_id = p_subject_id);
-
-    DELETE FROM teaching_loads 
-    WHERE group_id IN (SELECT group_id FROM `groups` WHERE subject_id = p_subject_id);
-
-    DELETE FROM subject_enrollments 
-    WHERE subject_id = p_subject_id;
-
-    -- Como groups tiene ON DELETE CASCADE con subjects, al borrar la asignatura se borran sus grupos
-    DELETE FROM subjects 
-    WHERE subject_id = p_subject_id;
-
-    COMMIT;
-END //
-
 DELIMITER ;
 
--- ==========================================
--- 3. LLAMADAS DE PRUEBA (Para ejecutar sin errores)
--- ==========================================
-SET @resultado = 100;
-SELECT AVG(grade_value) INTO @promedio_general FROM grades;
-CALL p_student_average(6, @promedio_estudiante);
-SELECT @promedio_general, @promedio_estudiante;
+-- =============================================================
+-- TESTS DE RESTRICCIONES DECLARATIVAS
+-- Todos siguen el mismo esquema:
+-- 1. Un handler: si la operación lanza un error (SQLEXCEPTION), registra
+--    PASS y sale del procedimiento (EXIT).
+-- 2. p_populate() restaura los datos iniciales.
+-- 3. Se intenta la operación que la regla prohíbe.
+-- 4. Si la ejecución llega a la última línea, no hubo error: FAIL.
+-- =============================================================
+
+-- Test RN01: Matrícula de honor requiere nota >= 9
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn01_mh_requirement()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN01', 'RN01: La MH requiere nota >= 9', 'PASS');
+
+    CALL p_populate();
+
+    UPDATE grades SET with_honors = 1 WHERE grade_id = 21;
+
+    CALL p_log_test('RN01', 'ERROR: Se permitió MH con nota inferior a 9', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN09: Los atributos obligatorios no pueden quedar a NULL
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn09_not_null_attributes()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN09', 'RN09: Los atributos obligatorios no pueden quedar a NULL', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO people (person_id, dni, first_name, last_name, age, email)
+        VALUES (103, '20000003C', NULL, 'Campos', 22, 'null@alum.us.es');
+
+    CALL p_log_test('RN09', 'ERROR: Se permitió dejar atributos obligatorios a NULL', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN10: Los créditos de una asignatura pueden ser 6 o 12
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn10_subject_credits()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN10', 'RN10: Los créditos de una asignatura pueden ser 6 o 12', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO subjects (subject_id, degree_id, subject_name, acronym, credits, course, subject_type)
+        VALUES (31, 3, 'Asignatura Créditos Inválidos', 'ACI', 8, 2, 'Obligatoria');
+
+    CALL p_log_test('RN10', 'ERROR: Se permitió una asignatura con créditos inválidos', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN11: El valor de la nota está comprendido entre 0 y 10
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn11_grade_range()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN11', 'RN11: La nota debe estar entre 0 y 10', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO grades (grade_id, student_id, group_id, grade_value, exam_call, with_honors)
+        VALUES (201, 6, 1, 11.0, 'Segunda', 0);
+
+    CALL p_log_test('RN11', 'ERROR: Se permitió una nota fuera de rango', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN12: La edad de las personas está entre 16 y 70 años
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn12_people_age()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN12', 'RN12: La edad de las personas debe estar entre 16 y 70', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO people (person_id, dni, first_name, last_name, age, email)
+        VALUES (105, '20000005E', 'Edad', 'Fuera', 80, 'edad@us.es');
+
+    CALL p_log_test('RN12', 'ERROR: Se permitió una edad fuera de rango', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN13: Los años de un grado están entre 3 y 6
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn13_degree_years()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN13', 'RN13: Los grados deben tener entre 3 y 6 años', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO degrees (degree_id, degree_name, duration_years)
+        VALUES (10, 'Grado Experimental', 2);
+
+    CALL p_log_test('RN13', 'ERROR: Se permitió un grado con años fuera de rango', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN14: El DNI está formado por 8 números y una letra
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn14_dni_format()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN14', 'RN14: El DNI debe tener 8 dígitos y una letra', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO people (person_id, dni, first_name, last_name, age, email)
+        VALUES (106, 'INVALIDO', 'DNI', 'Incorrecto', 30, 'dni@us.es');
+
+    CALL p_log_test('RN14', 'ERROR: Se permitió un DNI con formato inválido', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN15: El año académico está entre 2000 y 2100
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn15_academic_year()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN15', 'RN15: El año académico debe estar entre 2000 y 2100', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO groups (group_id, subject_id, group_name, activity, academic_year)
+        VALUES (20, 12, 'MD-T2025', 'Teoría', 1999);
+
+    CALL p_log_test('RN15', 'ERROR: Se permitió un año académico fuera de rango', 'FAIL');
+END //
+DELIMITER ;
+
+-- Test RN16: El curso de una asignatura está entre 1 y 6
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_test_rn16_course_range()
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        CALL p_log_test('RN16', 'RN16: El curso de una asignatura debe estar entre 1 y 6', 'PASS');
+
+    CALL p_populate();
+
+    INSERT INTO subjects (subject_id, degree_id, subject_name, acronym, credits, course, subject_type)
+        VALUES (30, 3, 'Asignatura Fuera de Curso', 'AFC', 6, 0, 'Obligatoria');
+
+    CALL p_log_test('RN16', 'ERROR: Se permitió un curso fuera de rango', 'FAIL');
+END //
+DELIMITER ;
+
+-- =============================================================
+-- ORQUESTADOR DE RESTRICCIONES DECLARATIVAS
+-- Vacía los resultados anteriores, ejecuta todos los tests y muestra el
+-- resultado de cada uno y el total de PASS y FAIL
+-- =============================================================
+DELIMITER //
+CREATE OR REPLACE PROCEDURE p_run_tests()
+BEGIN
+    DELETE FROM test_results;
+
+    CALL p_test_rn01_mh_requirement();
+    CALL p_test_rn09_not_null_attributes();
+    CALL p_test_rn10_subject_credits();
+    CALL p_test_rn11_grade_range();
+    CALL p_test_rn12_people_age();
+    CALL p_test_rn13_degree_years();
+    CALL p_test_rn14_dni_format();
+    CALL p_test_rn15_academic_year();
+    CALL p_test_rn16_course_range();
+
+    SELECT * FROM test_results ORDER BY execution_time, test_id;
+    SELECT test_status, COUNT(*) AS total FROM test_results GROUP BY test_status;
+END //
+DELIMITER ;
+
+CALL p_run_tests();
