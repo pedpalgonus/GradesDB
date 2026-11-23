@@ -1,10 +1,3 @@
---
--- Autor: David Ruiz
--- Fecha: Noviembre de 2026
--- Descripción: Tests de las restricciones declarativas de grades_db
--- Se incluye en: iissi1/labs/L4 y AN-B
---
-
 USE grades_db;
 
 -- =============================================================
